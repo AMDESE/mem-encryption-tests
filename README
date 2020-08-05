@@ -1,0 +1,23 @@
+
+TSME Test Module:
+	The TSME test module is a loadable Linux kernel module that can
+	be used to determine the state of TSME.
+
+	In order to determine if TSME is active, the SME feature must be
+	enabled, but it does not need to be active (the kernel does not
+	need to have been booted with mem_encrypt=on).
+
+	The TSME test module will create a sysfs file if no errors are
+	encountered while loading the module: /sys/kernel/tsme. If TSME
+	is active, the /sys/kernel/tsme file will report 1. If TSME is
+	not active, the /sys/kernel/tsme file will report 0.
+
+	To build:
+		make
+
+	To install:
+		insmod ./tsme-test.ko
+
+	In addition to creating the sysfs file, loading the module will
+	generate kernel messages that can also be used to determine the
+	status of TSME.
