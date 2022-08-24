@@ -72,7 +72,12 @@ static int __init tsme_test_init(void)
 	unsigned int level, retry;
 	int ret;
 
-	if (!boot_cpu_has(X86_FEATURE_SME)) {
+	if (cpuid_eax(0x80000000) < 0x8000001f) {
+		pr_err("CPUID leaf 0x8000001f is not available, will not be able to determine TSME status\n");
+		return -EINVAL;
+	}
+
+	if (!(cpuid_eax(0x8000001f) & 1)) {
 		pr_err("Memory encryption is not available, will not be able to determine TSME status\n");
 		return -EINVAL;
 	}
