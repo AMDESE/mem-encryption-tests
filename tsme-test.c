@@ -16,6 +16,7 @@
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
 
+#include <asm/msr-index.h>
 #include <asm/tlbflush.h>
 #include <asm/special_insns.h>
 
@@ -70,6 +71,7 @@ static int __init tsme_test_init(void)
 	struct page *page, *page_reference;
 	pte_t *ptep, old_pte, new_pte;
 	unsigned int level, retry;
+	u64 syscfg;
 	int ret;
 
 	if (cpuid_eax(0x80000000) < 0x8000001f) {
@@ -79,6 +81,12 @@ static int __init tsme_test_init(void)
 
 	if (!(cpuid_eax(0x8000001f) & 1)) {
 		pr_err("Memory encryption is not available, will not be able to determine TSME status\n");
+		return -EINVAL;
+	}
+
+	rdmsrl(MSR_AMD64_SYSCFG, syscfg);
+	if (!(syscfg & MSR_AMD64_SYSCFG_MEM_ENCRYPT)) {
+		pr_err("Memory encryption has not been enabled by BIOS (SMEE), will not be able to determine TSME status\n");
 		return -EINVAL;
 	}
 
