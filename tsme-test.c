@@ -63,6 +63,49 @@ static void update_pte(pte_t *ptep, pte_t pte)
 	flush_all(0);
 }
 
+#define SYSCFG_SME_SEV		(BIT_ULL(23))
+#define SYSCFG_SME_HMK		(BIT_ULL(26))
+
+static int __init tsme_check_prereqs(u64 *syscfg)
+{
+	bool smee_valid = (cpuid_eax(0x8000001f) & BIT(0)) != 0;
+	bool hmkee_valid = (cpuid_eax(0x80000023) & BIT(0)) != 0;
+	u64 msr, mask;
+
+	if (debug) {
+		pr_notice("SME status: cpuid_eax(0x8000001f)=%#010x\n", cpuid_eax(0x8000001f));
+		pr_notice("SME status: cpuid_ebx(0x8000001f)=%#010x\n", cpuid_ebx(0x8000001f));
+		pr_notice("SME-MK status: cpuid_eax(0x80000023)=%#010x\n", cpuid_eax(0x80000023));
+		pr_notice("SME-MK status: cpuid_ebx(0x80000023)=%#010x\n", cpuid_ebx(0x80000023));
+	}
+
+	*syscfg = 0;
+
+	if (!smee_valid) {
+		pr_err("Memory encryption is not available, will not be able to determine TSME status\n");
+		return -EINVAL;
+	}
+
+	mask = SYSCFG_SME_SEV;
+	if (hmkee_valid)
+		mask |= SYSCFG_SME_HMK;
+
+	rdmsrl(0xc0010010, msr);
+	if (debug) {
+		pr_notice("SYSCFG status: MSR=%#018llx, mask=%#018llx => %#018llx\n", msr, mask, msr & mask);
+	}
+
+	msr &= mask;
+	if (!msr) {
+		pr_err("Memory encryption has not been enabled by BIOS, will not be able to determine TSME status\n");
+		return -EINVAL;
+	}
+
+	*syscfg = msr;
+
+	return 0;
+}
+
 #define RETRY_COUNT 64
 static int __init tsme_test_init(void)
 {
@@ -74,27 +117,23 @@ static int __init tsme_test_init(void)
 	u64 syscfg;
 	int ret;
 
-	if (cpuid_eax(0x80000000) < 0x8000001f) {
-		pr_err("CPUID leaf 0x8000001f is not available, will not be able to determine TSME status\n");
-		return -EINVAL;
-	}
-
-	if (!(cpuid_eax(0x8000001f) & 1)) {
-		pr_err("Memory encryption is not available, will not be able to determine TSME status\n");
-		return -EINVAL;
-	}
-
-	rdmsrl(MSR_AMD64_SYSCFG, syscfg);
-	if (!(syscfg & MSR_AMD64_SYSCFG_MEM_ENCRYPT)) {
-		pr_err("Memory encryption has not been enabled by BIOS (SMEE), will not be able to determine TSME status\n");
-		return -EINVAL;
-	}
+	ret = tsme_check_prereqs(&syscfg);
+	if (ret)
+		return ret;
 
 	ret = -ENOMEM;
 
-	sme_mask = BIT_ULL(cpuid_ebx(0x8000001f) & 0x3f);
-	if (debug)
-		pr_notice("SME status: encryption-mask = %#lx\n", sme_mask);
+	if (syscfg == SYSCFG_SME_SEV) {
+		sme_mask = BIT_ULL(cpuid_ebx(0x8000001f) & 0x3f);
+		if (debug)
+			pr_notice("SME status: encryption-mask = %#018lx\n", sme_mask);
+	} else if (syscfg == SYSCFG_SME_HMK) {
+		pr_err("SME-MK mode is enabled, will not be able to determine TSME status\n");
+		return -EINVAL;
+	} else {
+		pr_err("Unsupported SME/SME-MK configuration: SYSCFG=%#018llx\n", syscfg);
+		return -EINVAL;
+	}
 
 	retry = 0;
 retry:
@@ -127,8 +166,8 @@ retry:
 
 	if (debug) {
 		pr_notice("%u additional attempts to allocate test capable buffer\n", retry);
-		pr_notice("Old PTE = %#lx, New PTE = %#lx\n", pte_val(old_pte), pte_val(new_pte));
-		pr_notice("Buffer (C-bit=%u)\n", (bool)(pte_val(old_pte) & sme_mask));
+		pr_notice("Old PTE = %#018lx, New PTE = %#018lx\n", pte_val(old_pte), pte_val(new_pte));
+		pr_notice("Buffer (KeyMask=%#018lx)\n", pte_val(old_pte) & sme_mask);
 		print_hex_dump(KERN_DEBUG, "TSME Test: Buffer (first 64 bytes - before: ", DUMP_PREFIX_OFFSET, 16, 1, buffer, 64, 1);
 	}
 
@@ -143,7 +182,7 @@ retry:
 	update_pte(ptep, new_pte);
 
 	if (debug) {
-		pr_notice("Buffer (C-bit=%u)\n", (bool)(pte_val(new_pte) & sme_mask));
+		pr_notice("Buffer (KeyMask=%#018lx)\n", pte_val(new_pte) & sme_mask);
 		print_hex_dump(KERN_DEBUG, "TSME Test: Buffer (first 64 bytes -  after: ", DUMP_PREFIX_OFFSET, 16, 1, buffer, 64, 1);
 	}
 
